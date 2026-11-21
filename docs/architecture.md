@@ -51,6 +51,7 @@ Every Go package, its responsibility, and the boundary it must respect.
 | `internal/assetlist` | Fetches and parses SEP-0042 Stellar Asset Lists to provide curated asset metadata and claims. | Outbound HTTP. Leaf package; called by `internal/scan`. |
 | `internal/cache` | Thread-safe in-memory TTL cache for HTTP responses and reputation queries. | No I/O. In-memory storage only; leaf package used by `internal/stellarexpert`. |
 | `internal/clockskew` | Detects and records upstream clock skew from response `Date` headers. | No I/O; a pure comparison of two timestamps, used by the fetchers. |
+| `internal/clockskew` | Records upstream `Date` headers that disagree with the scanner host's clock as scan-scoped diagnostics. | No I/O. Observations travel on `context.Context`; they never alter source timestamps. |
 | `internal/differential` | Compares Assay scanner reports against stellar-core XDR ledger state. | Test and verification utility; reads XDR and ledger state, no production dependencies. |
 | `internal/docindex` | Test-only check that the README docs tables stay in sync with `docs/`: every document is linked from the README, and every README link into `docs/` resolves. | Test-only; no production code, no I/O beyond reading the repository's own markdown. |
 | `internal/fixtures` | Utilities to read, diff, refresh, and validate test fixture manifests and provenance. | Filesystem I/O for fixtures; outbound HTTP when re-capturing. Offline and test only. |
