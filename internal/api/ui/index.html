@@ -396,6 +396,9 @@ function holderInputError(msg) {
   }
 }
 
+let scanController = null;
+let currentToken = 0;
+
 async function scan() {
   const asset = input.value.trim();
   if (!asset) return;
@@ -409,21 +412,40 @@ async function scan() {
   holderInputError(null);
 
   setURL(asset, holder);
+  // A newer scan supersedes an older one: abort the older request and ignore
+  // anything it still delivers, so a slow earlier answer cannot overwrite a
+  // later one.
+  if (scanController) scanController.abort();
+  scanController = new AbortController();
+  const token = ++currentToken;
   go.disabled = true;
   out.replaceChildren(note('Scanning…'));
   try {
     let url = '/api/v1/scan?asset=' + encodeURIComponent(asset);
     if (holder) url += '&holder=' + encodeURIComponent(holder);
-    const r = await fetch(url);
-    const body = await r.json();
+    const r = await fetch(url, { signal: scanController.signal });
+    if (token !== currentToken) return;
+    const text = await r.text();
+    if (token !== currentToken) return;
+    let body = null;
+    try { body = JSON.parse(text); } catch (_) { }
+    const reqId = r.headers.get('X-Request-Id');
     if (!r.ok) {
-      if (r.status === 400 && body.code === 'invalid_holder') {
+      if (r.status === 400 && body && body.code === 'invalid_holder') {
         holderInputError(body.error || 'Invalid holder address.');
         out.replaceChildren();
         return;
       }
-      out.replaceChildren(errorBox('Could not scan.', body.error,
+      const detail = (body && body.error) ? body.error :
+        'HTTP ' + r.status + (text ? ': ' + text.trim().slice(0, 200) : '');
+      out.replaceChildren(errorBox('Could not scan.', detail,
         'This is not a safety result. Assay reports only what it fetched.'));
+      return;
+    }
+    if (!body) {
+      out.replaceChildren(errorBox('Request failed.',
+        'Response was not valid JSON (HTTP ' + r.status + ').',
+        reqId ? 'Request id: ' + reqId : null));
       return;
     }
     if (body.schema_version !== EXPECTED_SCHEMA_VERSION) {
@@ -433,15 +455,17 @@ async function scan() {
         'The report schema does not match this page, so its fields cannot be trusted here.'));
       return;
     }
-    await render(body, r.headers.get('X-Assay-Undetermined') === 'true', asset, holder);
+    await render(body, r.headers.get('X-Assay-Undetermined') === 'true', asset, holder, token);
   } catch (err) {
+    if (err.name === 'AbortError') return;
+    if (token !== currentToken) return;
     out.replaceChildren(errorBox('Request failed.', err.message));
   } finally {
-    go.disabled = incompatible;
+    if (token === currentToken) go.disabled = incompatible;
   }
 }
 
-async function render(rep, undeterminedHeader, asset, holder) {
+async function render(rep, undeterminedHeader, asset, holder, token) {
   const frag = document.createDocumentFragment();
 
   if (rep.stale || rep.state === 'stale') {
@@ -473,6 +497,7 @@ async function render(rep, undeterminedHeader, asset, holder) {
   frag.append(attestSec);
   frag.append(historySec);
 
+  if (token !== currentToken) return;
   out.replaceChildren(frag);
 }
 
