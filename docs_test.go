@@ -26,6 +26,7 @@ func TestDocsAPIEndpointCoverage(t *testing.T) {
 		"GET /api/v1/meta":     "### `GET /api/v1/meta",
 		"GET /api/v1/scan":     "### `GET /api/v1/scan",
 		"GET /api/v1/history":  "### `GET /api/v1/history",
+		"GET /api/v1/events":   "### `GET /api/v1/events",
 		"GET /api/v1/exposure": "### `GET /api/v1/exposure",
 		"GET /metrics":         "### `GET /metrics`",
 		"GET /healthz":         "### `GET /healthz`",
