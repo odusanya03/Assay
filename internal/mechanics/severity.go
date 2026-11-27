@@ -170,6 +170,19 @@ const CapabilityMask = MechAuthRequired | MechAuthRevocable | MechClawbackEnable
 // Any asset matching this mask has severity >= High by construction.
 const ConfiscationMask = MechClawbackEnabled
 
+// PolicyMaskConfiscationOnly is the forbidden-bit mask for a policy that
+// accepts a freeze but never a confiscation. It is the Go-side name for the
+// contract's POLICY_MASK_CONFISCATION_ONLY and is passed to is_safe_masked.
+// The two definitions are pinned together by the ABI drift test.
+const PolicyMaskConfiscationOnly = ConfiscationMask
+
+// PolicyMaskFreezeInclusive is the forbidden-bit mask for a policy that
+// refuses both freeze and confiscation capability. It is the Go-side name for
+// the contract's POLICY_MASK_FREEZE_INCLUSIVE and is passed to
+// is_safe_masked. The two definitions are pinned together by the ABI drift
+// test.
+const PolicyMaskFreezeInclusive = MechAuthRevocable | MechClawbackEnabled
+
 // names is ordered by bit position for stable output.
 var names = []struct {
 	bit  Mechanic

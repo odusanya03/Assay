@@ -748,6 +748,164 @@ fn is_safe_property_exhaustive() {
     }
 }
 
+/// Deterministic generator for the u64-extreme property tests below.
+///
+/// A seeded generator keeps a failure reproducible without adding a property-
+/// testing dependency (and therefore without changing Cargo.lock). splitmix64
+/// is used because it is tiny, stable, and produces a different value for
+/// every call from one seed.
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Draw a value from the top of the u64 range, where freshness arithmetic is
+/// most likely to wrap, with occasional small values so the same test also
+/// covers the ordinary path.
+fn extreme_u64(state: &mut u64) -> u64 {
+    match splitmix64(state) % 5 {
+        0 => u64::MAX,
+        1 => u64::MAX - 1,
+        2 => u64::MAX - 600,
+        3 => u64::MAX / 2,
+        _ => splitmix64(state) % 2_000,
+    }
+}
+
+/// Property: `is_safe` must not admit anything because freshness arithmetic
+/// wrapped. Every generated case is compared with the saturating model the
+/// contract documents. The cases deliberately include `max_age_secs` and
+/// `attested_at` at `u64::MAX`, and an `attested_at` ahead of ledger time.
+///
+/// A wrapping subtraction is never smaller than a saturating one, so a wrap
+/// can only turn a fresh attestation into a refused one, never the reverse.
+/// The explicit assertions below pin that direction: the future-attestation
+/// cases difference is safe-direction only, and the result still matches the
+/// saturating model.
+#[test]
+fn is_safe_property_u64_extremes_seeded() {
+    let (env, client, _) = setup();
+    let seed = 0x5EED_0352_0000_0001u64;
+    let mut state = seed;
+
+    for case in 0..256u32 {
+        let asset = Address::generate(&env);
+        let attested_at = extreme_u64(&mut state);
+        let max_age = extreme_u64(&mut state);
+        let now = match splitmix64(&mut state) % 6 {
+            0 => attested_at,
+            1 => attested_at.saturating_sub(1),
+            2 => attested_at.saturating_add(1),
+            3 => u64::MAX,
+            4 => u64::MAX - 1,
+            _ => splitmix64(&mut state) % 2_000,
+        };
+
+        env.ledger().set_timestamp(attested_at);
+        client.attest(&asset, &SEVERITY_CLEAR, &0, &hash(&env));
+        env.ledger().set_timestamp(now);
+
+        let age = now.saturating_sub(attested_at);
+        let expected = max_age == 0 || age <= max_age;
+        let actual = client.is_safe(&asset, &SEVERITY_CRITICAL, &max_age);
+
+        assert_eq!(
+            actual, expected,
+            "seed={seed:#x} case={case} attested_at={attested_at} now={now} max_age={max_age} age={age}"
+        );
+
+        // The only cases where wrapping and saturating arithmetic differ are
+        // future attestations, where wrapping yields a huge age and
+        // saturating yields zero. That difference can only refuse more, so
+        // no admission is attributable to a wrap.
+        let wrapped_age = now.wrapping_sub(attested_at);
+        if wrapped_age != age {
+            assert!(
+                now < attested_at,
+                "seed={seed:#x} case={case} unexpected wrap direction"
+            );
+            assert!(
+                wrapped_age > age,
+                "seed={seed:#x} case={case} wrap was smaller than saturating age"
+            );
+            assert_eq!(
+                actual, expected,
+                "seed={seed:#x} case={case} wrap changed the answer"
+            );
+        }
+    }
+}
+
+/// The same property for `is_safe_masked`. The forbidden mask varies across the
+/// named policies as well as the arithmetic inputs, so a fresh-but-forbidden
+/// attestation must still be refused. No generated case may be admitted because
+/// of an arithmetic wrap.
+#[test]
+fn is_safe_masked_property_u64_extremes_seeded() {
+    let (env, client, _) = setup();
+    let seed = 0x5EED_0352_0000_0002u64;
+    let mut state = seed;
+    let masks = [
+        0u32,
+        POLICY_MASK_CONFISCATION_ONLY,
+        POLICY_MASK_FREEZE_INCLUSIVE,
+        u32::MAX,
+    ];
+
+    for case in 0..256u32 {
+        let asset = Address::generate(&env);
+        let attested_at = extreme_u64(&mut state);
+        let max_age = extreme_u64(&mut state);
+        let now = match splitmix64(&mut state) % 6 {
+            0 => attested_at,
+            1 => attested_at.saturating_sub(1),
+            2 => attested_at.saturating_add(1),
+            3 => u64::MAX,
+            4 => u64::MAX - 1,
+            _ => splitmix64(&mut state) % 2_000,
+        };
+        let flags = match splitmix64(&mut state) % 3 {
+            0 => 0u32,
+            1 => MECH_AUTH_REQUIRED,
+            _ => MECH_AUTH_REVOCABLE,
+        };
+        let forbidden = masks[(splitmix64(&mut state) % masks.len() as u64) as usize];
+
+        env.ledger().set_timestamp(attested_at);
+        client.attest(&asset, &SEVERITY_CLEAR, &flags, &hash(&env));
+        env.ledger().set_timestamp(now);
+
+        let age = now.saturating_sub(attested_at);
+        let fresh = max_age == 0 || age <= max_age;
+        let expected = fresh && flags & forbidden == 0;
+        let actual = client.is_safe_masked(&asset, &forbidden, &max_age);
+
+        assert_eq!(
+            actual, expected,
+            "seed={seed:#x} case={case} attested_at={attested_at} now={now} max_age={max_age} flags={flags} forbidden={forbidden} age={age}"
+        );
+
+        let wrapped_age = now.wrapping_sub(attested_at);
+        if wrapped_age != age {
+            assert!(
+                now < attested_at,
+                "seed={seed:#x} case={case} unexpected wrap direction"
+            );
+            assert!(
+                wrapped_age > age,
+                "seed={seed:#x} case={case} wrap was smaller than saturating age"
+            );
+            assert_eq!(
+                actual, expected,
+                "seed={seed:#x} case={case} wrap changed the answer"
+            );
+        }
+    }
+}
+
 /// Contract error discriminants are ABI documented in docs/integrating.md and live results.
 /// Reordering or changing discriminants silently breaks integrator error handling.
 #[test]
